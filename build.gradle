@@ -18,7 +18,9 @@ plugins {
 // artifact properties
 group = 'com.example.experimentflinkcdcconnectorspostgresdatastream'
 version = '0.1-SNAPSHOT'
-mainClassName = 'com.example.experimentflinkcdcconnectorspostgresdatastream.StreamingJob'
+
+// Set this to the class you'd like to run
+mainClassName = 'com.example.experimentflinkcdcconnectorspostgresdatastream.StreamingJobWithCustomDeserializer'
 description = """Flink Quickstart Job"""
 
 ext {
