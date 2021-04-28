@@ -36,6 +36,17 @@ services:
       - "5433:5432"
     networks:
       - default
+  pulsar:
+    image: apachepulsar/pulsar:2.7.0
+    command: bin/pulsar standalone
+    expose:
+      - "6650"
+      - "8080"
+    ports:
+      - "6650:6650"
+      - "8080:8080"
+    networks:
+      - default
 #  sink-db1:
 #    image: postgres:10.7
 #    environment:

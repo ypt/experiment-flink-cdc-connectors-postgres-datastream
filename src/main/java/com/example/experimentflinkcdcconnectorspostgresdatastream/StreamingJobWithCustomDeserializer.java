@@ -10,23 +10,21 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.connectors.pulsar.FlinkPulsarSink;
+import org.apache.flink.streaming.connectors.pulsar.config.RecordSchemaType;
+import org.apache.flink.streaming.connectors.pulsar.internal.JsonSer;
+import org.apache.flink.streaming.connectors.pulsar.table.PulsarSinkSemantic;
+import org.apache.flink.streaming.util.serialization.PulsarSerializationSchema;
+import org.apache.flink.streaming.util.serialization.PulsarSerializationSchemaWrapper;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 
-/**
- * Skeleton for a Flink Streaming Job.
- *
- * <p>For a tutorial how to write a Flink streaming application, check the
- * tutorials and examples on the <a href="https://flink.apache.org/docs/stable/">Flink Website</a>.
- *
- * <p>To package your application into a JAR file for execution, run
- * 'mvn clean package' on the command line.
- *
- * <p>If you change the name of the main class (with the public static void main(String[] args))
- * method, change the respective entry in the POM.xml file (simply search for 'mainClass').
- */
+import java.util.Optional;
+import java.util.Properties;
+
 public class StreamingJobWithCustomDeserializer {
     public static final String TABLE_USERS = "users";
     public static final String TABLE_USER_FAVORITE_COLORS = "user_favorite_colors";
@@ -91,24 +89,56 @@ public class StreamingJobWithCustomDeserializer {
                 .keyBy(v -> v.schema)
                 .process(new MyProcessFunction());
 
+        // Pulsar sinks
+        // ------------
+        Properties pulsarSinkProps = new Properties();
+        ClientConfigurationData pulsarClientConf = new ClientConfigurationData();
+        pulsarClientConf.setServiceUrl("pulsar://localhost:6650");
+
+        // Pulsar sink for UsersEvent
+        PulsarSerializationSchema<UsersEvent> pulsarUsersSerialization = new PulsarSerializationSchemaWrapper.Builder<>(JsonSer.of(UsersEvent.class))
+                .usePojoMode(UsersEvent.class, RecordSchemaType.JSON)
+                .build();
+        FlinkPulsarSink<UsersEvent> pulsarUsersSink = new FlinkPulsarSink(
+                "http://localhost:8080",
+                Optional.of("persistent://public/default/users"), // mandatory target topic or use `Optional.empty()` if pulsarUsersSink to different topics for each record
+                pulsarClientConf,
+                pulsarSinkProps,
+                pulsarUsersSerialization,
+                PulsarSinkSemantic.AT_LEAST_ONCE
+        );
+
+        // Pulsar sink for UserFavoriteColorsEvent
+        PulsarSerializationSchema<UserFavoriteColorsEvent> pulsarUserFavoriteColorsSerialization = new PulsarSerializationSchemaWrapper.Builder<>(JsonSer.of(UserFavoriteColorsEvent.class))
+                .usePojoMode(UserFavoriteColorsEvent.class, RecordSchemaType.JSON)
+                .build();
+        FlinkPulsarSink<UserFavoriteColorsEvent> pulsarUserFavoriteColorsSink = new FlinkPulsarSink(
+                "http://localhost:8080",
+                Optional.of("persistent://public/default/user_favorite_colors"), // mandatory target topic or use `Optional.empty()` if pulsarUsersSink to different topics for each record
+                pulsarClientConf,
+                pulsarSinkProps,
+                pulsarUserFavoriteColorsSerialization,
+                PulsarSinkSemantic.AT_LEAST_ONCE
+        );
+
         DataStream<UsersEvent> usersEventSideOutputStream = stream3.getSideOutput(usersEventOutputTag);
+        usersEventSideOutputStream.addSink(pulsarUsersSink).uid("pulsar_users_sink").name("pulsar_users_sink");
         usersEventSideOutputStream.print().setParallelism(1);
 
         DataStream<UserFavoriteColorsEvent> userFavoriteColorsEventSideOutputStream = stream3.getSideOutput(userFavoriteColorsEventOutputTag);
+        userFavoriteColorsEventSideOutputStream.addSink(pulsarUserFavoriteColorsSink).uid("pulsar_user_favorite_colors_sink").name("pulsar_user_favorite_colors_sink");
         userFavoriteColorsEventSideOutputStream.print().setParallelism(1);
 
-        // Example output from the above
+        // Example output from the above print() streams
         // UsersEvent{fullName='susan smith', id=1, op='r', schema='schema1', table='users'}
         // UserFavoriteColorsEvent{favoriteColor='red', userId=1, op='r', schema='schema1', table='user_favorite_colors'}
         // UsersEvent{fullName='bob smith', id=1, op='r', schema='schema2', table='users'}
         // UserFavoriteColorsEvent{favoriteColor='blue', userId=1, op='r', schema='schema2', table='user_favorite_colors'}
         // UserFavoriteColorsEvent{favoriteColor='purple', userId=1, op='u', schema='schema1', table='user_favorite_colors'}
 
-        // TODO: update readme
         // TODO: Stream -> Table API
-        // TODO: write up single JDBC sink
         // TODO: demuxing to multiple sinks
-        // TODO: write to Pulsar sink
+        // TODO: another job - pulsar source (Table API) -> jdbc sink
 
         env.execute("experiment");
     }
@@ -124,12 +154,11 @@ public class StreamingJobWithCustomDeserializer {
                     break;
                 case TABLE_USER_FAVORITE_COLORS:
                     ctx.output(userFavoriteColorsEventOutputTag, (UserFavoriteColorsEvent) value);
-
+                    break;
             }
         }
     }
 }
-
 
 class MyDebeziumDeserializationSchema implements DebeziumDeserializationSchema<DebeziumEvent> {
     private static final long serialVersionUID = -3168848963265670603L;
@@ -153,25 +182,25 @@ class MyDebeziumDeserializationSchema implements DebeziumDeserializationSchema<D
         // SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23470304, lsn_commit=23470248, lsn=23470304, txId=568, ts_usec=1616805535802803}} ConnectRecord{topic='postgres_cdc_source.schema2.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema2.users.Key:STRUCT}, value=Struct{before=Struct{id=1,full_name=bob smith},after=Struct{id=1,full_name=bobby smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1616805535802,db=experiment,schema=schema2,table=users,txId=568,lsn=23470304},op=u,ts_ms=1616805535901}, valueSchema=Schema{postgres_cdc_source.schema2.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
 
         Struct value = (Struct) sourceRecord.value();
-        Struct source = (Struct) value.get(FIELD_SOURCE);
-        Struct after = (Struct) value.get(FIELD_AFTER);
-        String op = (String) value.get(FIELD_OP);
+        Struct source = value.getStruct(FIELD_SOURCE);
+        Struct after = value.getStruct(FIELD_AFTER);
+        String op = value.getString(FIELD_OP);
 
-        switch (source.get(FIELD_TABLE).toString()) {
+        switch (source.getString(FIELD_TABLE)) {
             case StreamingJobWithCustomDeserializer.TABLE_USERS:
                 collector.collect(new UsersEvent(
                         op,
-                        (String) source.get(FIELD_SCHEMA),
-                        (Long) after.get(FIELD_ID),
-                        (String) after.get(FIELD_FULL_NAME)
+                        source.getString(FIELD_SCHEMA),
+                        after.getInt64(FIELD_ID),
+                        after.getString(FIELD_FULL_NAME)
                 ));
                 break;
             case StreamingJobWithCustomDeserializer.TABLE_USER_FAVORITE_COLORS:
                 collector.collect(new UserFavoriteColorsEvent(
-                        op, (String)
-                        source.get(FIELD_SCHEMA),
-                        (Long) after.get(FIELD_USER_ID),
-                        (String) after.get(FIELD_FAVORITE_COLOR)
+                        op,
+                        source.getString(FIELD_SCHEMA),
+                        after.getInt64(FIELD_USER_ID),
+                        after.getString(FIELD_FAVORITE_COLOR)
                 ));
                 break;
         }
@@ -197,6 +226,14 @@ class UsersEvent extends DebeziumEvent {
         super(op, schema, StreamingJobWithCustomDeserializer.TABLE_USERS);
         this.id = id;
         this.fullName = fullName;
+    }
+
+    public String getFullName() {
+        return fullName;
+    }
+
+    public Long getId() {
+        return id;
     }
 
     @Override
@@ -226,6 +263,14 @@ class UserFavoriteColorsEvent extends DebeziumEvent {
         this.favoriteColor = favoriteColor;
     }
 
+    public String getFavoriteColor() {
+        return favoriteColor;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
     @Override
     public String toString() {
         return "UserFavoriteColorsEvent{" +
@@ -251,6 +296,18 @@ class DebeziumEvent {
         this.op = op;
         this.schema = schema;
         this.table = table;
+    }
+
+    public String getOp() {
+        return op;
+    }
+
+    public String getSchema() {
+        return schema;
+    }
+
+    public String getTable() {
+        return table;
     }
 
     @Override

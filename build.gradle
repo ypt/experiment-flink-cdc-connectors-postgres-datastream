@@ -3,7 +3,7 @@ buildscript {
         jcenter() // this applies only to the Gradle 'Shadow' plugin
     }
     dependencies {
-        classpath 'com.github.jengelman.gradle.plugins:shadow:5.2.0'
+        classpath 'com.github.jengelman.gradle.plugins:shadow:6.0.0'
     }
 }
 
@@ -11,7 +11,7 @@ plugins {
     id 'java'
     id 'application'
     // shadow plugin to produce fat JARs
-    id 'com.github.johnrengelman.shadow' version '5.2.0'
+    id 'com.github.johnrengelman.shadow' version '6.0.0'
 }
 
 
@@ -93,6 +93,17 @@ dependencies {
     // --------------------------------------------------------------
     //flinkShadowJar "org.apache.flink:flink-connector-kafka-0.11_${scalaBinaryVersion}:${flinkVersion}"
     flinkShadowJar "com.alibaba.ververica:flink-connector-postgres-cdc:1.2.0"
+
+    // Pulsar
+    flinkShadowJar "io.streamnative.connectors:pulsar-flink-connector-${scalaBinaryVersion}:1.12.2.0"
+
+    // add this dependency, if you see the following exception at runtime
+    // java.lang.NoClassDefFoundError: Could not initialize class org.apache.pulsar.client.admin.PulsarAdmin
+    compile "org.apache.pulsar:pulsar-client-admin:2.7.0"
+
+    // add this dependency, if you see the following exception at runtime
+    // java.lang.ClassNotFoundException: org.apache.flink.table.types.DataType
+    flinkShadowJar "org.apache.flink:flink-table-common:${flinkVersion}"
 }
 
 // make compileOnly dependencies available for tests:

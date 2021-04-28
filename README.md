@@ -1,20 +1,26 @@
 # experiment-flink-cdc-connectors-postgres-datastream
 An experiment with Flink's [Debezium](https://debezium.io/) based
-[flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)
-[DataStream
-API](https://github.com/ververica/flink-cdc-connectors#usage-for-datastream-api).
+[flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)'s [DataStream
+API](https://github.com/ververica/flink-cdc-connectors#usage-for-datastream-api)
+and [Pulsar's Flink connector](https://github.com/streamnative/pulsar-flink).
 
 ## System
 Here's the system this repo sets up
 
-- Source: Two Postgres nodes
-- → Change-data-capture via [flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors) (aka Flink 
-  running embedded Debezium)
-- → Flink stream processing logic
-- → Sink: Stdout
+- Sources: Two Postgres nodes, each with two
+  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html)
+- → Change-data-capture via
+  [flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors) (aka
+  Flink running embedded Debezium)
+- → Flink stream processing logic - selectively picking fields, merging tables
+  logically
+- → Sink: [Apache Pulsar](https://pulsar.apache.org/)
 
 ## Run it
-Bring up two Postgres nodes, each with two schemas.
+Bring up the infrastructure, which includes:
+- Two Postgres nodes, each with two
+  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html)
+- Apache Pulsar
 ```sh
 docker-compose up
 ```
@@ -41,14 +47,32 @@ UPDATE schema1.users SET full_name = 'sue smith' where id = 1;
 UPDATE schema2.users SET full_name = 'bobby smith' where id = 1;
 ```
 
-Now examine your Flink application's stdout. You should see something like this.
-If not, see [Troubleshooting](#troubleshooting).
+Now examine your Flink application's `stdout`. You should see something like
+this. If not, see [Troubleshooting](#troubleshooting).
 ```
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23483376, lsn=23483376, txId=565, ts_usec=1617032465640931}} ConnectRecord{topic='postgres_cdc_source.schema1.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema1.users.Key:STRUCT}, value=Struct{after=Struct{id=1,full_name=susan smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032465640,db=experiment,schema=schema1,table=users,txId=565,lsn=23483376},op=c,ts_ms=1617032465709}, valueSchema=Schema{postgres_cdc_source.schema1.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23483752, lsn_commit=23483648, lsn=23483752, txId=566, ts_usec=1617032465645769}} ConnectRecord{topic='postgres_cdc_source.schema2.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema2.users.Key:STRUCT}, value=Struct{after=Struct{id=1,full_name=bob smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032465645,db=experiment,schema=schema2,table=users,txId=566,lsn=23483752},op=c,ts_ms=1617032465730}, valueSchema=Schema{postgres_cdc_source.schema2.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23484024, lsn_commit=23484024, lsn=23484024, txId=567, ts_usec=1617032465647414}} ConnectRecord{topic='postgres_cdc_source.schema1.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema1.users.Key:STRUCT}, value=Struct{before=Struct{id=1,full_name=susan smith},after=Struct{id=1,full_name=sue smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032465647,db=experiment,schema=schema1,table=users,txId=567,lsn=23484024},op=u,ts_ms=1617032465731}, valueSchema=Schema{postgres_cdc_source.schema1.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23484184, lsn_commit=23484184, lsn=23484184, txId=568, ts_usec=1617032466588937}} ConnectRecord{topic='postgres_cdc_source.schema2.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema2.users.Key:STRUCT}, value=Struct{before=Struct{id=1,full_name=bob smith},after=Struct{id=1,full_name=bobby smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032466588,db=experiment,schema=schema2,table=users,txId=568,lsn=23484184},op=u,ts_ms=1617032466753}, valueSchema=Schema{postgres_cdc_source.schema2.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
+UsersEvent{fullName='susan smith', id=1, op='c', schema='schema1', table='users'}
+UsersEvent{fullName='bob smith', id=1, op='c', schema='schema2', table='users'}
+UsersEvent{fullName='sue smith', id=1, op='u', schema='schema1', table='users'}
+UsersEvent{fullName='bobby smith', id=1, op='u', schema='schema2', table='users'}
 ```
+
+Now let's look for the same events in Pulsar, in the
+`persistent://public/default/users` topic.
+
+```sh
+docker-compose exec pulsar ./bin/pulsar-client consume -s mysub2 -n 0 -p Earliest users
+
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"c","schema":"schema1","table":"users","fullName":"susan smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"c","schema":"schema2","table":"users","fullName":"bob smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"u","schema":"schema1","table":"users","fullName":"sue smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"u","schema":"schema2","table":"users","fullName":"bobby smith","id":1}
+```
+
+Now let's try writing to our other Postgres node.
 
 Log into the other Postgres node
 ```sh
@@ -65,13 +89,48 @@ UPDATE schema3.users SET full_name = 'anna smith' where id = 1;
 UPDATE schema4.users SET full_name = 'andrew smith' where id = 1;
 ```
 
-Your Flink application's stdout should display something like this:
+Your Flink application's `stdout` should display something like this:
 ```
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23483376, lsn=23483376, txId=565, ts_usec=1617032554097436}} ConnectRecord{topic='postgres_cdc_source.schema3.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema3.users.Key:STRUCT}, value=Struct{after=Struct{id=1,full_name=anne smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032554097,db=experiment,schema=schema3,table=users,txId=565,lsn=23483376},op=c,ts_ms=1617032554373}, valueSchema=Schema{postgres_cdc_source.schema3.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23483752, lsn_commit=23483648, lsn=23483752, txId=566, ts_usec=1617032554105433}} ConnectRecord{topic='postgres_cdc_source.schema4.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema4.users.Key:STRUCT}, value=Struct{after=Struct{id=1,full_name=andy smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032554105,db=experiment,schema=schema4,table=users,txId=566,lsn=23483752},op=c,ts_ms=1617032554397}, valueSchema=Schema{postgres_cdc_source.schema4.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23484024, lsn_commit=23484024, lsn=23484024, txId=567, ts_usec=1617032554108097}} ConnectRecord{topic='postgres_cdc_source.schema3.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema3.users.Key:STRUCT}, value=Struct{before=Struct{id=1,full_name=anne smith},after=Struct{id=1,full_name=anna smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032554108,db=experiment,schema=schema3,table=users,txId=567,lsn=23484024},op=u,ts_ms=1617032554398}, valueSchema=Schema{postgres_cdc_source.schema3.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
-SourceRecord{sourcePartition={server=postgres_cdc_source}, sourceOffset={transaction_id=null, lsn_proc=23484240, lsn_commit=23484184, lsn=23484240, txId=568, ts_usec=1617032554661678}} ConnectRecord{topic='postgres_cdc_source.schema4.users', kafkaPartition=null, key=Struct{id=1}, keySchema=Schema{postgres_cdc_source.schema4.users.Key:STRUCT}, value=Struct{before=Struct{id=1,full_name=andy smith},after=Struct{id=1,full_name=andrew smith},source=Struct{version=1.4.1.Final,connector=postgresql,name=postgres_cdc_source,ts_ms=1617032554661,db=experiment,schema=schema4,table=users,txId=568,lsn=23484240},op=u,ts_ms=1617032554907}, valueSchema=Schema{postgres_cdc_source.schema4.users.Envelope:STRUCT}, timestamp=null, headers=ConnectHeaders(headers=)}
+UsersEvent{fullName='anne smith', id=1, op='c', schema='schema3', table='users'}
+UsersEvent{fullName='andy smith', id=1, op='c', schema='schema4', table='users'}
+UsersEvent{fullName='anna smith', id=1, op='u', schema='schema3', table='users'}
+UsersEvent{fullName='andrew smith', id=1, op='u', schema='schema4', table='users'}
 ```
+
+Now take a look at your `pulsar-client` that is consuming the
+`persistent://public/default/users` topic again. You should see the new changes
+appear!
+
+```sh
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"c","schema":"schema3","table":"users","fullName":"anne smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"c","schema":"schema4","table":"users","fullName":"andy smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"u","schema":"schema3","table":"users","fullName":"anna smith","id":1}
+# ----- got message -----
+# key:[null], properties:[], content:{"op":"u","schema":"schema4","table":"users","fullName":"andrew smith","id":1}
+```
+
+## Recap
+So what just happened?
+- We started with two Postgres nodes as data sources, each with two
+  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html).
+- Our Flink job captures changes from these via
+  [flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)
+- Our Flink job selectively grabs column data from these change events
+- Our Flink job merges the changes from all of these Postgres nodes x schemas to
+  a single stream per table
+- Our Flink job then writes the merged streams to Pulsar, one topic per table.
+
+## Next up
+- Some other Flink job can consume [from
+  Pulsar](https://github.com/streamnative/pulsar-flink#table-environment) and
+  write to some other sink - for example a [JDBC
+  sink](https://ci.apache.org/projects/flink/flink-docs-stable/dev/table/connectors/jdbc.html)
+  - which can act as a stand in for a data warehouse. For ease of use, one can
+    consider creating these jobs via [Flink SQL
+    Client](https://ci.apache.org/projects/flink/flink-docs-stable/dev/table/sqlClient.html).
 
 ## Troubleshooting
 If you see this, until [this
