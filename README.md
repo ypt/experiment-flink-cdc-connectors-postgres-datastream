@@ -1,13 +1,14 @@
 # experiment-flink-cdc-connectors-postgres-datastream
 An experiment with Flink's [Debezium](https://debezium.io/) based
-[flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)'s [DataStream
+[flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)'s
+[DataStream
 API](https://github.com/ververica/flink-cdc-connectors#usage-for-datastream-api)
 and [Pulsar's Flink connector](https://github.com/streamnative/pulsar-flink).
 
 ## System
 Here's the system this repo sets up
 
-- Sources: Two Postgres nodes, each with two
+- Source: One Postgres node, with two
   [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html)
 - → Change-data-capture via
   [flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors) (aka
@@ -16,11 +17,18 @@ Here's the system this repo sets up
   logically
 - → Sink: [Apache Pulsar](https://pulsar.apache.org/)
 
+And
+- Source: [Apache Pulsar](https://pulsar.apache.org/)
+- → Flink streaming aggregation
+- → Sink: Postgres aggregate results table
+
 ## Run it
 Bring up the infrastructure, which includes:
-- Two Postgres nodes, each with two
-  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html)
-- Apache Pulsar
+- One Postgres node with
+  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html), functioning as
+  a source
+- Another Postgres node, functioning as a sink
+- Apache Pulsar, functioning both sink and source
 ```sh
 docker-compose up
 ```
@@ -32,7 +40,9 @@ Run and test your application locally with an embedded instance of Flink
 
 The Flink web UI is also enabled locally. Visit http://localhost:8081.
 
-Log into one of the Postgres nodes
+### Getting data from Postgres → Pulsar
+
+Log into our Postgres node functioning as a source
 ```sh
 docker-compose exec source-db1 psql experiment experiment
 ```
@@ -42,6 +52,7 @@ Examine replication slots, and insert and update some data
 SELECT * FROM pg_replication_slots;
 
 INSERT INTO schema1.users (full_name) VALUES ('susan smith');
+INSERT INTO schema1.users (full_name) VALUES ('anne smith');
 INSERT INTO schema2.users (full_name) VALUES ('bob smith');
 UPDATE schema1.users SET full_name = 'sue smith' where id = 1;
 UPDATE schema2.users SET full_name = 'bobby smith' where id = 1;
@@ -50,10 +61,11 @@ UPDATE schema2.users SET full_name = 'bobby smith' where id = 1;
 Now examine your Flink application's `stdout`. You should see something like
 this. If not, see [Troubleshooting](#troubleshooting).
 ```
-UsersEvent{fullName='susan smith', id=1, op='c', schema='schema1', table='users'}
-UsersEvent{fullName='bob smith', id=1, op='c', schema='schema2', table='users'}
-UsersEvent{fullName='sue smith', id=1, op='u', schema='schema1', table='users'}
-UsersEvent{fullName='bobby smith', id=1, op='u', schema='schema2', table='users'}
+UsersEvent{key='schema1|1', fullName='susan smith', id=1, op='c', schema='schema1', table='users'}
+UsersEvent{key='schema1|2', fullName='anne smith', id=2, op='c', schema='schema1', table='users'}
+UsersEvent{key='schema2|1', fullName='bob smith', id=1, op='c', schema='schema2', table='users'}
+UsersEvent{key='schema1|1', fullName='sue smith', id=1, op='u', schema='schema1', table='users'}
+UsersEvent{key='schema2|1', fullName='bobby smith', id=1, op='u', schema='schema2', table='users'}
 ```
 
 Now let's look for the same events in Pulsar, in the
@@ -63,74 +75,73 @@ Now let's look for the same events in Pulsar, in the
 docker-compose exec pulsar ./bin/pulsar-client consume -s mysub2 -n 0 -p Earliest users
 
 # ----- got message -----
-# key:[null], properties:[], content:{"op":"c","schema":"schema1","table":"users","fullName":"susan smith","id":1}
+# key:[c2NoZW1hMXwx], properties:[], content:{"key":"schema1|1","op":"c","schema":"schema1","table":"users","fullName":"susan smith","id":1}
 # ----- got message -----
-# key:[null], properties:[], content:{"op":"c","schema":"schema2","table":"users","fullName":"bob smith","id":1}
+# key:[c2NoZW1hMXwy], properties:[], content:{"key":"schema1|2","op":"c","schema":"schema1","table":"users","fullName":"anne smith","id":2}
 # ----- got message -----
-# key:[null], properties:[], content:{"op":"u","schema":"schema1","table":"users","fullName":"sue smith","id":1}
+# key:[c2NoZW1hMnwx], properties:[], content:{"key":"schema2|1","op":"c","schema":"schema2","table":"users","fullName":"bob smith","id":1}
 # ----- got message -----
-# key:[null], properties:[], content:{"op":"u","schema":"schema2","table":"users","fullName":"bobby smith","id":1}
+# key:[c2NoZW1hMXwx], properties:[], content:{"key":"schema1|1","op":"u","schema":"schema1","table":"users","fullName":"sue smith","id":1}
+# ----- got message -----
+# key:[c2NoZW1hMnwx], properties:[], content:{"key":"schema2|1","op":"u","schema":"schema2","table":"users","fullName":"bobby smith","id":1}
 ```
 
-Now let's try writing to our other Postgres node.
+### Getting data from Pulsar → Postgres
 
-Log into the other Postgres node
+Now, let's take a look at our Postgres node functioning as a sink
+
 ```sh
-docker-compose exec source-db2 psql experiment experiment
+docker-compose exec sink-db1 psql experiment experiment
 ```
 
-Examine replication slots, and insert and update some data
+For reference, our Flink job should be upserting aggregated data there, like so:
+
 ```sql
-SELECT * FROM pg_replication_slots;
-
-INSERT INTO schema3.users (full_name) VALUES ('anne smith');
-INSERT INTO schema4.users (full_name) VALUES ('andy smith');
-UPDATE schema3.users SET full_name = 'anna smith' where id = 1;
-UPDATE schema4.users SET full_name = 'andrew smith' where id = 1;
+INSERT INTO user_count_by_pgschema (pgschema, user_count)
+SELECT schema, COUNT(1) as user_count
+FROM users_from_pulsar
+GROUP BY schema
 ```
 
-Your Flink application's `stdout` should display something like this:
-```
-UsersEvent{fullName='anne smith', id=1, op='c', schema='schema3', table='users'}
-UsersEvent{fullName='andy smith', id=1, op='c', schema='schema4', table='users'}
-UsersEvent{fullName='anna smith', id=1, op='u', schema='schema3', table='users'}
-UsersEvent{fullName='andrew smith', id=1, op='u', schema='schema4', table='users'}
+Check out the aggregated results
+```sql
+SELECT * FROM user_count_by_pgschema;
+
+#  pgschema | user_count
+# ----------+------------
+#  schema1  |          2
+#  schema2  |          1
 ```
 
-Now take a look at your `pulsar-client` that is consuming the
-`persistent://public/default/users` topic again. You should see the new changes
-appear!
-
-```sh
-# ----- got message -----
-# key:[null], properties:[], content:{"op":"c","schema":"schema3","table":"users","fullName":"anne smith","id":1}
-# ----- got message -----
-# key:[null], properties:[], content:{"op":"c","schema":"schema4","table":"users","fullName":"andy smith","id":1}
-# ----- got message -----
-# key:[null], properties:[], content:{"op":"u","schema":"schema3","table":"users","fullName":"anna smith","id":1}
-# ----- got message -----
-# key:[null], properties:[], content:{"op":"u","schema":"schema4","table":"users","fullName":"andrew smith","id":1}
-```
+Now try inserting and updating rows in the Postgres source and watch the
+Postgres sink reflect updated results.
 
 ## Recap
 So what just happened?
-- We started with two Postgres nodes as data sources, each with two
-  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html).
+
+First, we captured changes from Postgres → Pulsar
+- We started with one Postgres node with multiple Postgres
+  [schemas](https://www.postgresql.org/docs/10/ddl-schemas.html) as a data
+  source
 - Our Flink job captures changes from these via
   [flink-cdc-connectors](https://github.com/ververica/flink-cdc-connectors)
 - Our Flink job selectively grabs column data from these change events
-- Our Flink job merges the changes from all of these Postgres nodes x schemas to
-  a single stream per table
+- Our Flink job merges the changes from all of the Postgres schemas to a single
+  stream per table
 - Our Flink job then writes the merged streams to Pulsar, one topic per table.
 
-## Next up
-- Some other Flink job can consume [from
-  Pulsar](https://github.com/streamnative/pulsar-flink#table-environment) and
-  write to some other sink - for example a [JDBC
-  sink](https://ci.apache.org/projects/flink/flink-docs-stable/dev/table/connectors/jdbc.html)
-  - which can act as a stand in for a data warehouse. For ease of use, one can
-    consider creating these jobs via [Flink SQL
-    Client](https://ci.apache.org/projects/flink/flink-docs-stable/dev/table/sqlClient.html).
+Then, we computed and wrote aggregated data from Pulsar → Postgres
+- Given our Postgres changes written onto Pulsar from the previous step...
+- We leveraged the [pulsar-flink](https://github.com/streamnative/pulsar-flink)
+  connector and Flink's SQL API to fetch data from Pulsar
+- We leveraged Flink's SQL API to compute some aggregates
+- We leveraged Flink's SQL API to write the aggregate results to a [JDBC
+  sink](https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/table/connectors/jdbc.html)
+
+## Next steps
+Try...
+- deletes
+- writing to different kinds of sinks
 
 ## Troubleshooting
 If you see this, until [this

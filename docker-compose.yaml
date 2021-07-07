@@ -18,22 +18,35 @@ services:
       - "5432:5432"
     networks:
       - default
-  source-db2:
+#  source-db2:
+#    image: postgres:10.7
+#    environment:
+#      POSTGRES_USER: experiment
+#      POSTGRES_PASSWORD: experiment
+#    # Configure Postgres replication slot. Alternatively, this can be done via postgresql.conf
+#    # https://debezium.io/documentation/reference/1.0/connectors/postgresql.html#server-configuration
+#    command: postgres -c wal_level=logical -c max_wal_senders=10 -c max_replication_slots=10
+#    volumes:
+#      - ./setup_source_db2.sql:/docker-entrypoint-initdb.d/setup_source_db2.sql
+#      # TODO: configuration for var/lib/postgresql/data/pg_hba.conf
+#      # https://debezium.io/documentation/reference/1.0/connectors/postgresql.html#PostgreSQL-permissions
+#    expose:
+#      - "5432"
+#    ports:
+#      - "5433:5432"
+#    networks:
+#      - default
+  sink-db1:
     image: postgres:10.7
     environment:
       POSTGRES_USER: experiment
       POSTGRES_PASSWORD: experiment
-    # Configure Postgres replication slot. Alternatively, this can be done via postgresql.conf
-    # https://debezium.io/documentation/reference/1.0/connectors/postgresql.html#server-configuration
-    command: postgres -c wal_level=logical -c max_wal_senders=10 -c max_replication_slots=10
     volumes:
-      - ./setup_source_db2.sql:/docker-entrypoint-initdb.d/setup_source_db2.sql
-      # TODO: configuration for var/lib/postgresql/data/pg_hba.conf
-      # https://debezium.io/documentation/reference/1.0/connectors/postgresql.html#PostgreSQL-permissions
+      - ./setup_sink_db1.sql:/docker-entrypoint-initdb.d/setup_sink_db1.sql
     expose:
       - "5432"
     ports:
-      - "5433:5432"
+      - "5434:5432"
     networks:
       - default
   pulsar:
@@ -47,27 +60,18 @@ services:
       - "8080:8080"
     networks:
       - default
-#  sink-db1:
-#    image: postgres:10.7
-#    environment:
-#      POSTGRES_USER: experiment
-#      POSTGRES_PASSWORD: experiment
-#    command: postgres
-#    volumes:
-#      - ./setup_sink_db1.sql:/docker-entrypoint-initdb.d/setup_sink_db1.sql
-#    expose:
-#      - "5432"
-#    # ports:
-#    #   - "5434:5434"
-#    networks:
-#      - default
 #  sql-client:
-#    build: ./client-image
+#    build: ./sql-client-image
 #    # image: demo/debezium-flink-sql
 #    depends_on:
 #      # - kafka
 #      - jobmanager
 #      # - elasticsearch
+#
+#    # To use a local build of flink-cdc-connectors, uncomment the below
+#    # Also remove the old flink-sql-connector-postgres-cdc jar file from /opt/sql-client/lib/
+#    # volumes:
+#    #   - /path/to/build/of/flink-cdc-connectors/flink-connector-postgres-cdc/target/flink-connector-postgres-cdc-1.4-SNAPSHOT.jar:/opt/sql-client/lib/flink-connector-postgres-cdc-1.4-SNAPSHOT.jar
 #    environment:
 #      FLINK_JOBMANAGER_HOST: jobmanager
 #      # ZOOKEEPER_CONNECT: zookeeper
@@ -87,6 +91,7 @@ services:
 #    command: taskmanager
 #    environment:
 #      - JOB_MANAGER_RPC_ADDRESS=jobmanager
-#      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=3
+#      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=5
+#      - TASK_MANAGER_MEMORY_FLINK_SIZE=1024
 networks:
   default: {}

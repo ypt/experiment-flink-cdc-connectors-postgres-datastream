@@ -72,6 +72,10 @@ dependencies {
     compile "org.apache.flink:flink-java:${flinkVersion}"
     compile "org.apache.flink:flink-streaming-java_${scalaBinaryVersion}:${flinkVersion}"
 
+    // for table API
+    compile "org.apache.flink:flink-table-api-java-bridge_${scalaBinaryVersion}:${flinkVersion}"
+    compile "org.apache.flink:flink-table-planner-blink_${scalaBinaryVersion}:${flinkVersion}"
+
     // Add this to run your Flink program locally
     // https://ci.apache.org/projects/flink/flink-docs-stable/dev/local_execution.html
     compile "org.apache.flink:flink-clients_${scalaBinaryVersion}:${flinkVersion}"
@@ -91,8 +95,7 @@ dependencies {
     // Dependencies that should be part of the shadow jar, e.g.
     // connectors. These must be in the flinkShadowJar configuration!
     // --------------------------------------------------------------
-    //flinkShadowJar "org.apache.flink:flink-connector-kafka-0.11_${scalaBinaryVersion}:${flinkVersion}"
-    flinkShadowJar "com.alibaba.ververica:flink-connector-postgres-cdc:1.2.0"
+    flinkShadowJar "com.alibaba.ververica:flink-connector-postgres-cdc:1.4.0"
 
     // Pulsar
     flinkShadowJar "io.streamnative.connectors:pulsar-flink-connector-${scalaBinaryVersion}:1.12.2.0"
@@ -100,6 +103,10 @@ dependencies {
     // add this dependency, if you see the following exception at runtime
     // java.lang.NoClassDefFoundError: Could not initialize class org.apache.pulsar.client.admin.PulsarAdmin
     compile "org.apache.pulsar:pulsar-client-admin:2.7.0"
+
+    // JDBC sink
+    flinkShadowJar "org.apache.flink:flink-connector-jdbc_${scalaBinaryVersion}:${flinkVersion}"
+    flinkShadowJar "org.postgresql:postgresql:42.2.23"
 
     // add this dependency, if you see the following exception at runtime
     // java.lang.ClassNotFoundException: org.apache.flink.table.types.DataType

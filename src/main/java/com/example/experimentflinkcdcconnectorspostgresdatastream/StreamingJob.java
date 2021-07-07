@@ -57,7 +57,7 @@ public class StreamingJob {
 
                 // This simple deserializer just toString's a SourceRecord. We'll want to impl our own to extract the
                 // data that we want.
-                // See: https://github.com/ververica/flink-cdc-connectors/blob/release-1.2/flink-connector-debezium/src/main/java/com/alibaba/ververica/cdc/debezium/StringDebeziumDeserializationSchema.java
+                // See: https://github.com/ververica/flink-cdc-connectors/blob/release-1.4/flink-connector-debezium/src/main/java/com/alibaba/ververica/cdc/debezium/StringDebeziumDeserializationSchema.java
                 .deserializer(new StringDebeziumDeserializationSchema())
                 .build();
 
